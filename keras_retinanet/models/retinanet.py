@@ -350,6 +350,7 @@ def retinanet_bbox(
     boxes = layers.ClipBoxes(name='clipped_boxes')([model.inputs[0], boxes])
 
     # filter detections (apply NMS / score threshold / select top-k)
+    '''
     detections = layers.FilterDetections(
         nms                   = nms,
         class_specific_filter = class_specific_filter,
@@ -359,6 +360,9 @@ def retinanet_bbox(
         max_detections        = max_detections,
         parallel_iterations   = parallel_iterations
     )([boxes, classification] + other)
-
+    '''
     # construct the model
-    return keras.models.Model(inputs=model.inputs, outputs=detections, name=name)
+    #return keras.models.Model(inputs=model.inputs, outputs=detections, name=name)
+
+    # dummy return without filtering and using classification twice as a placeholder 
+    return keras.models.Model(inputs=model.inputs, outputs=[boxes, classification, classification], name=name)

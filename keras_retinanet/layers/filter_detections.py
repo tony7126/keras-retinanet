@@ -15,7 +15,9 @@ limitations under the License.
 """
 
 import keras
+import warnings
 from .. import backend
+from ..utils.seq_nms import seq_nms
 
 
 def filter_detections(
@@ -26,7 +28,10 @@ def filter_detections(
     nms                   = True,
     score_threshold       = 0.05,
     max_detections        = 300,
-    nms_threshold         = 0.5
+    nms_threshold         = 0.5,
+    sq_nms                = False, 
+    sq_nms_threshold      = 0.3,
+    sq_linkage_threshold  = 0.5
 ):
     """ Filter detections using the boxes and classification values.
 
@@ -39,6 +44,9 @@ def filter_detections(
         score_threshold       : Threshold used to prefilter the boxes with.
         max_detections        : Maximum number of detections to keep.
         nms_threshold         : Threshold for the IoU value to determine when a box should be suppressed.
+        sq_nms                : Flag to enable/disable sequential non-maximum suppression
+        sq_linkage_threshold  : Threshold used to link two boxes in adjacent frames for seq-nms 
+        sq_nms_threshold      : Threshold for the IoU value to determine when a box should be suppressed with regards to a best sequence for seq-nms.
 
     Returns
         A list of [boxes, scores, labels, other[0], other[1], ...].
@@ -49,6 +57,11 @@ def filter_detections(
         In case there are less than max_detections detections, the tensors are padded with -1's.
     """
     def _filter_detections(scores, labels):
+        # if we run seq_nms, then must run nms
+        if sq_nms:
+            #nms = True 
+            seq_nms(boxes, scores, linkage_threshold=sq_linkage_threshold, nms_threshold = sq_nms_threshold)
+        
         # threshold based on score
         indices = backend.where(keras.backend.greater(scores, score_threshold))
 
@@ -81,6 +94,11 @@ def filter_detections(
     else:
         scores  = keras.backend.max(classification, axis    = 1)
         labels  = keras.backend.argmax(classification, axis = 1)
+
+        # turn off sq_nms in non-class specific filtering 
+        if sq_nms:
+            warnings.warn("seq-nms cannot be enabled with non-class specific filtering and will be disabled")
+            sq_nms = False
         indices = _filter_detections(scores, labels)
 
     # select top k
@@ -153,7 +171,6 @@ class FilterDetections(keras.layers.Layer):
         boxes          = inputs[0]
         classification = inputs[1]
         other          = inputs[2:]
-
         # wrap nms with our parameters
         def _filter_detections(args):
             boxes          = args[0]
