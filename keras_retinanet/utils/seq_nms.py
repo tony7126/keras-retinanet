@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import numpy as np
+import copy 
 
 '''
 CONF_THRESH = 0.5
@@ -13,20 +14,22 @@ def seq_nms(boxes, scores, linkage_threshold=0.5, nms_threshold=0.3):
     corresponding to the input frame.  
     Args 
         boxes                 : Tensor of shape (num_frames, num_boxes, 4) containing the boxes in (x1, y1, x2, y2) format.
-        scores                : Tensor of shape (num_frames, num_boxes) containing the classification scores.
+        scores                : Tensor of shape (num_frames, num_boxes) containing the confidence score for each box.
         linkage_threshold     : Threshold used to link two boxes in adjacent frames 
         nms_threshold         : Threshold for the IoU value to determine when a box should be suppressed with regards to a best sequence.
     '''
     # optional: prefilter boxes based on score 
     # use filtered boxes and scores to create nms graph across frames 
-    box_graph = build_box_sequences(boxes, linkage_threshold=linkage_threshold)
+    box_graph = build_box_sequences(boxes, scores, linkage_threshold=linkage_threshold)
+    print("BOX GRAPH SHAPE", box_graph.shape)
     _seq_nms(box_graph, boxes, scores, nms_threshold)
 
-def build_box_sequences(boxes, linkage_threshold=0.5):
+def build_box_sequences(boxes, scores, linkage_threshold=0.5):
     ''' Build bounding box sequences across frames. A sequence is a set of boxes that are linked in a video
     where we define a linkage as boxes in adjacent frames (of the same class) with IoU above linkage_threshold (0.5 by default).
     Args
         boxes                  : Tensor of shape (num_frames, num_boxes, 4) containing the boxes in (x1, y1, x2, y2) format. 
+        scores                : Tensor of shape (num_frames, num_boxes) containing the confidence score for each box.
         linkage_threshold      : Threshold for the IoU value to determine if two boxes in neighboring frames are linked 
     Returns 
         A list of shape (num_frames - 1, num_boxes, k, 1) where k is the number of edges to boxes in neighboring frame (s.t. 0 <= k <= num_boxes at f+1)
@@ -35,25 +38,25 @@ def build_box_sequences(boxes, linkage_threshold=0.5):
     box_graph = []
     # iterate over neighboring frames 
     for f in range(boxes.shape[0] - 1):
-        boxes_f, scores_f = boxes[f,:,:], scores[f,:,:]
-        boxes_f1, scores_f1 = boxes[f+1,:,:], scores[f+1,:,:]
+        boxes_f, scores_f = boxes[f,:,:], scores[f,:]
+        boxes_f1, scores_f1 = boxes[f+1,:,:], scores[f+1,:]
         if f == 0:
-            areas_f = (boxes_f[:,2] - boxes_f[:,0] + 1) * (boxes_f[:,3] - boxes_f[:1] + 1) 
+            areas_f = (boxes_f[:,2] - boxes_f[:,0] + 1) * (boxes_f[:,3] - boxes_f[:,1] + 1) 
         else: 
             areas_f = areas_f1
 
         # calculate areas for boxes in next frame
-        areas_f1 = (boxes_f1[:,2] - boxes_f1[:,0] + 1) * (boxes_f1[:,3] - boxes_f1[:1] + 1) 
+        areas_f1 = (boxes_f1[:,2] - boxes_f1[:,0] + 1) * (boxes_f1[:,3] - boxes_f1[:,1] + 1) 
 
         adjacency_matrix = []
         for i, box in enumerate(boxes_f):
-            overlaps = compute_overlap(box1, boxes_f1, areas1=None, areas2=areas_f1)
+            overlaps = compute_overlap(np.expand_dims(box,axis=0), boxes_f1, box_areas=None, query_areas=areas_f1)[0]
 
             # add linkage if IoU greater than threshold and boxes have same labels i.e class  
             edges = [ovr_idx for ovr_idx, IoU in enumerate(overlaps) if IoU >= linkage_threshold]
             adjacency_matrix.append(edges)
         box_graph.append(adjacency_matrix)
-    return box_graph 
+    return np.array(box_graph)
 
 def find_best_sequence(box_graph, scores):
     ''' Given graph of all linked boxes, find the best sequence in the graph. The best sequence 
@@ -79,7 +82,7 @@ def find_best_sequence(box_graph, scores):
     sequence_roots = []
 
     # starting from the last frame, build base paths i.e paths consisting of a single node 
-    max_scores_paths.append([(box[4], [idx]) for idx, box in enumerate(scores[-1])])
+    max_scores_paths.append([(score, [idx]) for idx, score in enumerate(scores[-1])])
 
     for reverse_idx, frame_edges in enumerate(box_graph[::-1]): # list of edges between neigboring frames i.e frame dimension 
         max_paths_f = []
@@ -112,14 +115,14 @@ def find_best_sequence(box_graph, scores):
 
     # iterate sequence roots to find sequence with max score 
     best_score = 0 
-    best_sequence = 0 
+    best_sequence = [] 
     sequence_frame_index = 0
-    for index, frame_sequences in enumerate(roots):
+    for index, frame_sequences in enumerate(sequence_roots):
         if not frame_sequences: continue 
         max_index = np.argmax([sequence[0] for sequence in frame_sequences])
         if frame_sequences[max_index][0] > best_score:
-            best_score = frame_sequences[maxindex][0]
-            best_sequence = frame_sequences[maxindex][1][::-1] # reverse path 
+            best_score = frame_sequences[max_index][0]
+            best_sequence = frame_sequences[max_index][1][::-1] # reverse path 
             sequence_frame_index = index
     return sequence_frame_index, best_sequence, best_score
 
@@ -137,11 +140,11 @@ def rescore_sequence(sequence, scores, sequence_frame_index, max_sum, score_metr
     if score_metric == 'avg':
         avg_score=max_sum/len(sequence)
         for i,box_ind in enumerate(sequence):
-            scores[root_index+i][box_ind][4]= avg_score
+            scores[sequence_frame_index+i][box_ind]= avg_score
     elif score_metric == 'max':
         max_score = np.max(sequence)
         for i, box_ind in enumerate(sequence):
-            scores[root_index + i][box_ind][4] = max_score
+            scores[sequence_frame_index + i][box_ind] = max_score
     else:
         raise ValueError("Invalid score metric")
 
@@ -162,7 +165,7 @@ def delete_sequence(sequence_to_delete, sequence_frame_index, scores, boxes, box
         seq_box_area = box_areas[box_idx]
         seq_box = boxes[sequence_frame_index+i][box_idx]
 
-        overlaps = compute_overlap(seq_box, boxes_f1, areas1=seq_box_area, areas2=box_areas)
+        overlaps = compute_overlap(np.expand_dims(seq_box,axis=0), boxes[sequence_frame_index+i,:], box_areas=seq_box_area, query_areas=box_areas)[0]
         deletes=[ovr_idx for ovr_idx,IoU in enumerate(overlaps) if IoU >= suppress_threshold]
 
         if sequence_frame_index + i < len(box_graph): 
@@ -170,10 +173,10 @@ def delete_sequence(sequence_to_delete, sequence_frame_index, scores, boxes, box
                 box_graph[sequence_frame_index+i][delete_idx]=[]
         if i > 0 or sequence_frame_index > 0:
             # remove connections to current sequence node from previous frame nodes
-            for priorbox in box_graph[rootindex+i-1]: 
+            for prior_box in box_graph[sequence_frame_index+i-1]: 
                 for delete_idx in deletes:
-                    if delete_idx in priorbox:
-                        priorbox.remove(delete_idx)
+                    if delete_idx in prior_box:
+                        prior_box.remove(delete_idx)
     
 
 def _seq_nms(box_graph, boxes, scores, nms_threshold):
@@ -188,13 +191,15 @@ def _seq_nms(box_graph, boxes, scores, nms_threshold):
     '''
     while True: 
         sequence_frame_index, best_sequence, best_score = find_best_sequence(box_graph, scores)
-        if not best_sequence:
+        #print(best_sequence, best_score)
+        if len(best_sequence) <= 1:
             break 
         rescore_sequence(best_sequence, scores, sequence_frame_index, best_score)
         delete_sequence(best_sequence, sequence_frame_index, scores, boxes, box_graph, suppress_threshold=nms_threshold)
+        
 
 # TODO: OPTIMIZE with Cython and resuse areas instead of recomputing
-def compute_overlap(boxes, query_boxes, boxes_areas=None, query_areas=None):
+def compute_overlap(boxes, query_boxes, box_areas=None, query_areas=None):
 
     N = boxes.shape[0]
     K = query_boxes.shape[0]
@@ -222,3 +227,8 @@ def compute_overlap(boxes, query_boxes, boxes_areas=None, query_areas=None):
                     )
                     overlaps[n, k] = iw * ih / ua
     return overlaps 
+
+if __name__ == "__main__":
+    boxes = np.load('/Users/tmoopenn/projects/keras-retinanet/examples/boxes.npy')
+    scores = np.load('/Users/tmoopenn/projects/keras-retinanet/examples/classifcations.npy')
+    seq_nms(boxes, scores)
