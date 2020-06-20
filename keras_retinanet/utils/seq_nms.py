@@ -20,6 +20,7 @@ def seq_nms(boxes, scores, linkage_threshold=0.5, nms_threshold=0.3):
     '''
     # optional: prefilter boxes based on score 
     # use filtered boxes and scores to create nms graph across frames 
+    print(boxes.shape, scores.shape)
     box_graph = build_box_sequences(boxes, scores, linkage_threshold=linkage_threshold)
     print("BOX GRAPH SHAPE", box_graph.shape)
     _seq_nms(box_graph, boxes, scores, nms_threshold)
@@ -191,7 +192,7 @@ def _seq_nms(box_graph, boxes, scores, nms_threshold):
     '''
     while True: 
         sequence_frame_index, best_sequence, best_score = find_best_sequence(box_graph, scores)
-        #print(best_sequence, best_score)
+        print(best_sequence, best_score)
         if len(best_sequence) <= 1:
             break 
         rescore_sequence(best_sequence, scores, sequence_frame_index, best_score)
@@ -229,6 +230,6 @@ def compute_overlap(boxes, query_boxes, box_areas=None, query_areas=None):
     return overlaps 
 
 if __name__ == "__main__":
-    boxes = np.load('/Users/tmoopenn/projects/keras-retinanet/examples/boxes.npy')
-    scores = np.load('/Users/tmoopenn/projects/keras-retinanet/examples/classifcations.npy')
-    seq_nms(boxes, scores)
+    #boxes = np.load('/path/to/boxes')
+    #scores = np.load('/path/to/scores')
+    #seq_nms(boxes, scores)
