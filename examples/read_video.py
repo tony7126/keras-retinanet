@@ -33,7 +33,7 @@ import tensorflow.python.util.deprecation as deprecation
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
 num_classes = 80
-def post_process_nms_applied(boxes, classifications, labels, max_detections=300):
+def post_process_nms_applied(boxes, classifications, labels, max_detections=300, no_seq_nms=False):
     '''
     all_inds = []
     for i in range(num_classes):
@@ -67,7 +67,8 @@ def post_process_nms_applied(boxes, classifications, labels, max_detections=300)
 
     #scores = backend.gather_nd(scores_by_class, indices)
     '''
-    seq_nms(boxes, classifications, labels)
+    if not no_seq_nms:
+        seq_nms(boxes, classifications, labels)
     indices = []
     for i in range(boxes.shape[0]):
         frame_indices = non_max_suppression_fast(boxes[i,:,:], classifications[i,:], overlapThresh=0.5)
@@ -165,15 +166,25 @@ def capture_video_frames(video_file, num_frames_to_capture=3, start_fpos=0):
     print("Image batch:", all_frames.shape)
     return all_frames, draw_frames, scale
 
-def build_model(model_file, with_filtering=True, max_detections=2000, nms_threshold=0.6, score_threshold=0.05, training_model=False):
+def build_model(model_file, add_filtering=True, max_detections=2000, nms_threshold=0.6, score_threshold=0.05, training_model=False, filtering_layer_included=False):
     model_path = os.path.join('..', 'snapshots', model_file)
     # load retinanet model
     model = models.load_model(model_path, backbone_name='resnet50')
 
-    if with_filtering:
-        boxes, classification = model.layers[-3].output, model.layers[-2].output
-        other = model.layers[-2].output
+    if training_model:
+        model = models.convert_model(model)
+    #print(model.summary())
 
+    if filtering_layer_included:
+        print("model already contains filtered layer")
+        boxes, classification = model.layers[-3].output, model.layers[-2].output
+    else:
+        boxes, classification = model.layers[-2].output, model.layers[-1].output
+
+    if add_filtering:
+        #boxes, classification = model.layers[-3].output, model.layers[-2].output
+        #other = model.layers[-2].output
+        print("Adding modified filtering layer...")
         detections = layers.FilterDetections(
                 nms                   = True,
                 class_specific_filter = True,
@@ -189,12 +200,9 @@ def build_model(model_file, with_filtering=True, max_detections=2000, nms_thresh
         model1 = Model(model.input, detections)
     else:
         # get classification and regression layers and build new model 
-        model1 = Model(model.input, outputs=[model.layers[-6].output, model.layers[-2].output])
+        model1 = Model(model.input, outputs=[boxes, classification])
 
-    if training_model:
-        model1 = models.convert_model(model1)
-
-    #print(model.summary())
+    print(model1.summary())
 
     return model1
 
@@ -230,7 +238,7 @@ def parse_args():
     parser.add_argument('--video_file', help='Video file to run the model on', required=True)
     parser.add_argument('--frames_to_capture', help='Number of sequential video frames to capture and detect objects on', default=3, type=int)
     parser.add_argument('--start_fpos', help='Starting frame at which to begin capturing frames', default=0, type=int)
-    parser.add_argument('--no_filtering', help='Flag indicating whether to include the final filtering layer in the loaded model', action='store_true')
+    parser.add_argument('--add_filtering', help='Flag indicating whether to include the final filtering layer in the loaded model', action='store_true')
     parser.add_argument('--pause_length', help='Number of seconds to pause betweeing displaying frames for visualized detections', default=1, type=int)
     parser.add_argument('--linkage_threshold', help='Threshold to use for box linkage threshold in seq-nms algorithm', default=0.5, type=float)
     parser.add_argument('--score_threshold', help='Threshold to use as minimum confidence for score confidences', default=0.05, type=float)
@@ -238,6 +246,9 @@ def parse_args():
     parser.add_argument('---seq_nms_threshold', help='Threshold to use for suppression of boxes with regards to best sequences in seq-nms algorithm', default=0.3, type=float)
     parser.add_argument('--max_detections', help='Maximum number of detections to return from post-processing', default=2000, type=int)
     parser.add_argument('--training_model', help='Flag indicating whether model is training model or not', action='store_true')
+    parser.add_argument('--filter_layer_included', help='Flag indicating whether loaded model already contains a filtering level', action='store_true')
+    parser.add_argument('--general_detection', help='Flag indicating whether loaded model is general fine-tuned for ball dectection', action='store_true')
+    parser.add_argument('--no_seq_nms', help='Flag to turn off seq-nms', action='store_true')
     args = parser.parse_args()
     return args 
 
@@ -249,14 +260,17 @@ if __name__ == '__main__':
     # set the modified tf session as backend in keras
     setup_gpu(gpu)
 
-    labels_to_names = {0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus', 6: 'train', 7: 'truck', 8: 'boat', 9: 'traffic light', 10: 'fire hydrant', 11: 'stop sign', 12: 'parking meter', 13: 'bench', 14: 'bird', 15: 'cat', 16: 'dog', 17: 'horse', 18: 'sheep', 19: 'cow', 20: 'elephant', 21: 'bear', 22: 'zebra', 23: 'giraffe', 24: 'backpack', 25: 'umbrella', 26: 'handbag', 27: 'tie', 28: 'suitcase', 29: 'frisbee', 30: 'skis', 31: 'snowboard', 32: 'sports ball', 33: 'kite', 34: 'baseball bat', 35: 'baseball glove', 36: 'skateboard', 37: 'surfboard', 38: 'tennis racket', 39: 'bottle', 40: 'wine glass', 41: 'cup', 42: 'fork', 43: 'knife', 44: 'spoon', 45: 'bowl', 46: 'banana', 47: 'apple', 48: 'sandwich', 49: 'orange', 50: 'broccoli', 51: 'carrot', 52: 'hot dog', 53: 'pizza', 54: 'donut', 55: 'cake', 56: 'chair', 57: 'couch', 58: 'potted plant', 59: 'bed', 60: 'dining table', 61: 'toilet', 62: 'tv', 63: 'laptop', 64: 'mouse', 65: 'remote', 66: 'keyboard', 67: 'cell phone', 68: 'microwave', 69: 'oven', 70: 'toaster', 71: 'sink', 72: 'refrigerator', 73: 'book', 74: 'clock', 75: 'vase', 76: 'scissors', 77: 'teddy bear', 78: 'hair drier', 79: 'toothbrush'}
+    if args.general_detection:
+        labels_to_names = {0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus', 6: 'train', 7: 'truck', 8: 'boat', 9: 'traffic light', 10: 'fire hydrant', 11: 'stop sign', 12: 'parking meter', 13: 'bench', 14: 'bird', 15: 'cat', 16: 'dog', 17: 'horse', 18: 'sheep', 19: 'cow', 20: 'elephant', 21: 'bear', 22: 'zebra', 23: 'giraffe', 24: 'backpack', 25: 'umbrella', 26: 'handbag', 27: 'tie', 28: 'suitcase', 29: 'frisbee', 30: 'skis', 31: 'snowboard', 32: 'sports ball', 33: 'kite', 34: 'baseball bat', 35: 'baseball glove', 36: 'skateboard', 37: 'surfboard', 38: 'tennis racket', 39: 'bottle', 40: 'wine glass', 41: 'cup', 42: 'fork', 43: 'knife', 44: 'spoon', 45: 'bowl', 46: 'banana', 47: 'apple', 48: 'sandwich', 49: 'orange', 50: 'broccoli', 51: 'carrot', 52: 'hot dog', 53: 'pizza', 54: 'donut', 55: 'cake', 56: 'chair', 57: 'couch', 58: 'potted plant', 59: 'bed', 60: 'dining table', 61: 'toilet', 62: 'tv', 63: 'laptop', 64: 'mouse', 65: 'remote', 66: 'keyboard', 67: 'cell phone', 68: 'microwave', 69: 'oven', 70: 'toaster', 71: 'sink', 72: 'refrigerator', 73: 'book', 74: 'clock', 75: 'vase', 76: 'scissors', 77: 'teddy bear', 78: 'hair drier', 79: 'toothbrush'}
+    else:
+        labels_to_names = {0:'ball'}
 
     # get video frames, draw frames and scale 
     image_batch, draw_frames, scale = capture_video_frames(args.video_file, num_frames_to_capture=args.frames_to_capture, start_fpos=args.start_fpos)
 
     #build model 
-    model = build_model(args.model_file, with_filtering=args.no_filtering, max_detections=args.max_detections, nms_threshold=args.nms_threshold, 
-                score_threshold=args.score_threshold, training_model=args.training_model)
+    model = build_model(args.model_file, add_filtering=args.add_filtering, max_detections=args.max_detections, nms_threshold=args.nms_threshold, 
+                score_threshold=args.score_threshold, training_model=args.training_model, filtering_layer_included=args.filter_layer_included)
 
     # process frames 
     start = time.time()
@@ -268,11 +282,11 @@ if __name__ == '__main__':
     #np.save("classifcations15.npy", classification)
 
     # Post-processing
-    if args.no_filtering:
+    if not args.add_filtering:
         boxes, scores, labels, inds = post_process(boxes, classification)
     else:
-        boxes, scores, labels, inds = post_process_nms_applied(boxes, classification, labels)
-    print(boxes.shape, scores.shape, labels.shape)
+        boxes, scores, labels, inds = post_process_nms_applied(boxes, classification, labels, no_seq_nms=args.no_seq_nms)
+    #print(boxes.shape, scores.shape, labels.shape)
 
     # visualize detections
     visualize_video(boxes, scores, labels, inds, scale, pause_rate=args.pause_length)
