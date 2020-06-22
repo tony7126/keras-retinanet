@@ -9,7 +9,7 @@ NMS_THRESH = 0.3
 IOU_THRESH = 0.6
 '''
 
-def seq_nms(boxes, scores, linkage_threshold=0.5, nms_threshold=0.3):
+def seq_nms(boxes, scores, labels=None, linkage_threshold=0.5, nms_threshold=0.3):
     ''' Filter detections using the seq-nms algorithm. Boxes and classifications should be organized sequentially along the first dimension 
     corresponding to the input frame.  
     Args 
@@ -21,11 +21,11 @@ def seq_nms(boxes, scores, linkage_threshold=0.5, nms_threshold=0.3):
     # optional: prefilter boxes based on score 
     # use filtered boxes and scores to create nms graph across frames 
     print(boxes.shape, scores.shape)
-    box_graph = build_box_sequences(boxes, scores, linkage_threshold=linkage_threshold)
+    box_graph = build_box_sequences(boxes, scores, labels, linkage_threshold=linkage_threshold)
     print("BOX GRAPH SHAPE", box_graph.shape)
     _seq_nms(box_graph, boxes, scores, nms_threshold)
 
-def build_box_sequences(boxes, scores, linkage_threshold=0.5):
+def build_box_sequences(boxes, scores, labels=[], linkage_threshold=0.5):
     ''' Build bounding box sequences across frames. A sequence is a set of boxes that are linked in a video
     where we define a linkage as boxes in adjacent frames (of the same class) with IoU above linkage_threshold (0.5 by default).
     Args
@@ -54,7 +54,10 @@ def build_box_sequences(boxes, scores, linkage_threshold=0.5):
             overlaps = compute_overlap(np.expand_dims(box,axis=0), boxes_f1, box_areas=None, query_areas=areas_f1)[0]
 
             # add linkage if IoU greater than threshold and boxes have same labels i.e class  
-            edges = [ovr_idx for ovr_idx, IoU in enumerate(overlaps) if IoU >= linkage_threshold]
+            if labels == []:
+                edges = [ovr_idx for ovr_idx, IoU in enumerate(overlaps) if IoU >= linkage_threshold]
+            else:
+                edges = [ovr_idx for ovr_idx, IoU in enumerate(overlaps) if IoU >= linkage_threshold and labels[f,i] == labels[f+1,ovr_idx]]
             adjacency_matrix.append(edges)
         box_graph.append(adjacency_matrix)
     return np.array(box_graph)
@@ -229,7 +232,7 @@ def compute_overlap(boxes, query_boxes, box_areas=None, query_areas=None):
                     overlaps[n, k] = iw * ih / ua
     return overlaps 
 
-if __name__ == "__main__":
+#if __name__ == "__main__":
     #boxes = np.load('/path/to/boxes')
     #scores = np.load('/path/to/scores')
     #seq_nms(boxes, scores)
