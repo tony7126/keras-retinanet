@@ -2,6 +2,7 @@
 
 import numpy as np
 import copy 
+from ..utils.compute_overlap import compute_overlap_areas_given, compute_area
 
 '''
 CONF_THRESH = 0.5
@@ -18,9 +19,7 @@ def seq_nms(boxes, scores, labels=None, linkage_threshold=0.5, nms_threshold=0.3
         linkage_threshold     : Threshold used to link two boxes in adjacent frames 
         nms_threshold         : Threshold for the IoU value to determine when a box should be suppressed with regards to a best sequence.
     '''
-    # optional: prefilter boxes based on score 
     # use filtered boxes and scores to create nms graph across frames 
-    print(boxes.shape, scores.shape)
     box_graph = build_box_sequences(boxes, scores, labels, linkage_threshold=linkage_threshold)
     print("BOX GRAPH SHAPE", box_graph.shape)
     _seq_nms(box_graph, boxes, scores, nms_threshold, score_metric=score_metric)
@@ -42,19 +41,19 @@ def build_box_sequences(boxes, scores, labels=[], linkage_threshold=0.5):
         boxes_f, scores_f = boxes[f,:,:], scores[f,:]
         boxes_f1, scores_f1 = boxes[f+1,:,:], scores[f+1,:]
         if f == 0:
-            areas_f = (boxes_f[:,2] - boxes_f[:,0] + 1) * (boxes_f[:,3] - boxes_f[:,1] + 1) 
+            areas_f = compute_area(boxes_f.astype(np.double)) #(boxes_f[:,2] - boxes_f[:,0] + 1) * (boxes_f[:,3] - boxes_f[:,1] + 1)
         else: 
             areas_f = areas_f1
 
         # calculate areas for boxes in next frame
-        areas_f1 = (boxes_f1[:,2] - boxes_f1[:,0] + 1) * (boxes_f1[:,3] - boxes_f1[:,1] + 1) 
+        areas_f1 = compute_area(boxes_f1.astype(np.double)) #(boxes_f1[:,2] - boxes_f1[:,0] + 1) * (boxes_f1[:,3] - boxes_f1[:,1] + 1)
 
         adjacency_matrix = []
         for i, box in enumerate(boxes_f):
-            overlaps = compute_overlap(np.expand_dims(box,axis=0), boxes_f1, box_areas=None, query_areas=areas_f1)[0]
+            overlaps = compute_overlap_areas_given(np.expand_dims(box,axis=0).astype(np.double), boxes_f1.astype(np.double), areas_f1.astype(np.double) )[0]
 
             # add linkage if IoU greater than threshold and boxes have same labels i.e class  
-            if labels == []:
+            if len(labels) == 0 :
                 edges = [ovr_idx for ovr_idx, IoU in enumerate(overlaps) if IoU >= linkage_threshold]
             else:
                 edges = [ovr_idx for ovr_idx, IoU in enumerate(overlaps) if IoU >= linkage_threshold and labels[f,i] == labels[f+1,ovr_idx]]
@@ -167,11 +166,13 @@ def delete_sequence(sequence_to_delete, sequence_frame_index, scores, boxes, box
         None  
     '''
     for i,box_idx in enumerate(sequence_to_delete):
-        box_areas= (boxes[sequence_frame_index + i,:,2] - boxes[sequence_frame_index+i,:,0] + 1) * (boxes[sequence_frame_index+i,:,3] - boxes[sequence_frame_index+i,:,1] + 1) 
+        #box_areas= (boxes[sequence_frame_index + i,:,2] - boxes[sequence_frame_index+i,:,0] + 1) * (boxes[sequence_frame_index+i,:,3] - boxes[sequence_frame_index+i,:,1] + 1) 
+        other_boxes = boxes[sequence_frame_index + i]
+        box_areas = compute_area(other_boxes.astype(np.double))
         seq_box_area = box_areas[box_idx]
         seq_box = boxes[sequence_frame_index+i][box_idx]
 
-        overlaps = compute_overlap(np.expand_dims(seq_box,axis=0), boxes[sequence_frame_index+i,:], box_areas=seq_box_area, query_areas=box_areas)[0]
+        overlaps = compute_overlap_areas_given(np.expand_dims(seq_box,axis=0).astype(np.double), boxes[sequence_frame_index+i,:].astype(np.double), box_areas.astype(np.double))[0]
         deletes=[ovr_idx for ovr_idx,IoU in enumerate(overlaps) if IoU >= suppress_threshold]
 
         if sequence_frame_index + i < len(box_graph): 
@@ -204,37 +205,8 @@ def _seq_nms(box_graph, boxes, scores, nms_threshold, score_metric='avg'):
         delete_sequence(best_sequence, sequence_frame_index, scores, boxes, box_graph, suppress_threshold=nms_threshold)
         
 
-# TODO: OPTIMIZE with Cython and resuse areas instead of recomputing
-def compute_overlap(boxes, query_boxes, box_areas=None, query_areas=None):
-
-    N = boxes.shape[0]
-    K = query_boxes.shape[0]
-    overlaps = np.zeros((N, K), dtype=np.float64)
-    for k in range(K):
-        box_area = ( 
-        (query_boxes[k, 2] - query_boxes[k, 0]) * 
-        (query_boxes[k, 3] - query_boxes[k, 1]) 
-        )
-        for n in range(N):
-            iw = (
-                min(boxes[n, 2], query_boxes[k, 2]) -
-                max(boxes[n, 0], query_boxes[k, 0]) 
-            )
-            if iw > 0:
-                ih = (
-                    min(boxes[n, 3], query_boxes[k, 3]) -
-                    max(boxes[n, 1], query_boxes[k, 1]) 
-                )
-                if ih > 0:
-                    ua = np.float64(
-                        (boxes[n, 2] - boxes[n, 0]) *
-                        (boxes[n, 3] - boxes[n, 1]) +
-                        box_area - iw * ih
-                    )
-                    overlaps[n, k] = iw * ih / ua
-    return overlaps 
-
 #if __name__ == "__main__":
     #boxes = np.load('/path/to/boxes')
     #scores = np.load('/path/to/scores')
-    #seq_nms(boxes, scores)
+    #labels = np.ones(scores.shape)
+    #seq_nms(boxes, scores, labels)
