@@ -9,7 +9,7 @@ NMS_THRESH = 0.3
 IOU_THRESH = 0.6
 '''
 
-def seq_nms(boxes, scores, labels=None, linkage_threshold=0.5, nms_threshold=0.3):
+def seq_nms(boxes, scores, labels=None, linkage_threshold=0.5, nms_threshold=0.3, score_metric='avg'):
     ''' Filter detections using the seq-nms algorithm. Boxes and classifications should be organized sequentially along the first dimension 
     corresponding to the input frame.  
     Args 
@@ -23,7 +23,7 @@ def seq_nms(boxes, scores, labels=None, linkage_threshold=0.5, nms_threshold=0.3
     print(boxes.shape, scores.shape)
     box_graph = build_box_sequences(boxes, scores, labels, linkage_threshold=linkage_threshold)
     print("BOX GRAPH SHAPE", box_graph.shape)
-    _seq_nms(box_graph, boxes, scores, nms_threshold)
+    _seq_nms(box_graph, boxes, scores, nms_threshold, score_metric=score_metric)
 
 def build_box_sequences(boxes, scores, labels=[], linkage_threshold=0.5):
     ''' Build bounding box sequences across frames. A sequence is a set of boxes that are linked in a video
@@ -146,7 +146,9 @@ def rescore_sequence(sequence, scores, sequence_frame_index, max_sum, score_metr
         for i,box_ind in enumerate(sequence):
             scores[sequence_frame_index+i][box_ind]= avg_score
     elif score_metric == 'max':
-        max_score = np.max(sequence)
+        max_score = 0.0
+        for i, box_ind in enumerate(sequence):
+            if scores[sequence_frame_index + i][box_ind] > max_score: max_score = scores[sequence_frame_index+i][box_ind]
         for i, box_ind in enumerate(sequence):
             scores[sequence_frame_index + i][box_ind] = max_score
     else:
@@ -183,7 +185,7 @@ def delete_sequence(sequence_to_delete, sequence_frame_index, scores, boxes, box
                         prior_box.remove(delete_idx)
     
 
-def _seq_nms(box_graph, boxes, scores, nms_threshold):
+def _seq_nms(box_graph, boxes, scores, nms_threshold, score_metric='avg'):
     ''' Iteratively executes the seq-nms algorithm given a box graph.
     Args
         box_graph                   : list of shape (num_frames - 1, num_boxes, k) returned from build_box_sequences that contains box sequences 
@@ -198,7 +200,7 @@ def _seq_nms(box_graph, boxes, scores, nms_threshold):
         print(best_sequence, best_score)
         if len(best_sequence) <= 1:
             break 
-        rescore_sequence(best_sequence, scores, sequence_frame_index, best_score)
+        rescore_sequence(best_sequence, scores, sequence_frame_index, best_score, score_metric=score_metric)
         delete_sequence(best_sequence, sequence_frame_index, scores, boxes, box_graph, suppress_threshold=nms_threshold)
         
 

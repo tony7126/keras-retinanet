@@ -33,7 +33,7 @@ import tensorflow.python.util.deprecation as deprecation
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
 num_classes = 80
-def post_process_nms_applied(boxes, classifications, labels, max_detections=300, no_seq_nms=False):
+def post_process_nms_applied(boxes, classifications, labels, max_detections=300, no_seq_nms=False, score_metric='avg'):
     '''
     all_inds = []
     for i in range(num_classes):
@@ -67,8 +67,12 @@ def post_process_nms_applied(boxes, classifications, labels, max_detections=300,
 
     #scores = backend.gather_nd(scores_by_class, indices)
     '''
+    #print(classifications[0][0])
+    #print(classifications[0][0],classifications[1][0],classifications[2][2],classifications[3][0],classifications[4][2])
+    #print(labels[0][0],labels[1][0],labels[2][2],labels[3][0],labels[4][2])
     if not no_seq_nms:
-        seq_nms(boxes, classifications, labels)
+        seq_nms(boxes, classifications, labels, score_metric=score_metric)
+    #print(classifications[0][0])
     indices = []
     for i in range(boxes.shape[0]):
         frame_indices = non_max_suppression_fast(boxes[i,:,:], classifications[i,:], overlapThresh=0.5)
@@ -202,7 +206,7 @@ def build_model(model_file, add_filtering=True, max_detections=2000, nms_thresho
         # get classification and regression layers and build new model 
         model1 = Model(model.input, outputs=[boxes, classification])
 
-    print(model1.summary())
+    #print(model1.summary())
 
     return model1
 
@@ -210,9 +214,9 @@ def visualize_video(boxes, scores, labels, indices, scale, pause_rate=3):
     boxes /= scale
     for i, frame_idx in enumerate(inds[:,0]):
         box, score, label = boxes[i], scores[i], labels[i]
-        print(box, score, label)
+        #print(box, score, label)
         draw = draw_frames[frame_idx]
-        if score < 0.5: break 
+        if score < 0.5: continue
 
         color = label_color(label)
 
@@ -243,12 +247,13 @@ def parse_args():
     parser.add_argument('--linkage_threshold', help='Threshold to use for box linkage threshold in seq-nms algorithm', default=0.5, type=float)
     parser.add_argument('--score_threshold', help='Threshold to use as minimum confidence for score confidences', default=0.05, type=float)
     parser.add_argument('--nms_threshold', help='Threshold to use as for nms algorithm', default=0.6, type=float)
-    parser.add_argument('---seq_nms_threshold', help='Threshold to use for suppression of boxes with regards to best sequences in seq-nms algorithm', default=0.3, type=float)
+    parser.add_argument('--seq_nms_threshold', help='Threshold to use for suppression of boxes with regards to best sequences in seq-nms algorithm', default=0.4, type=float)
     parser.add_argument('--max_detections', help='Maximum number of detections to return from post-processing', default=2000, type=int)
     parser.add_argument('--training_model', help='Flag indicating whether model is training model or not', action='store_true')
     parser.add_argument('--filter_layer_included', help='Flag indicating whether loaded model already contains a filtering level', action='store_true')
     parser.add_argument('--general_detection', help='Flag indicating whether loaded model is general fine-tuned for ball dectection', action='store_true')
     parser.add_argument('--no_seq_nms', help='Flag to turn off seq-nms', action='store_true')
+    parser.add_argument('--score_metric', help='Scoring metric to use for rescoring best sequence in seq-nms algorithm', default='avg', type=str)
     args = parser.parse_args()
     return args 
 
@@ -282,12 +287,13 @@ if __name__ == '__main__':
     #np.save("classifcations15.npy", classification)
 
     # Post-processing
+    start = time.time()
     if not args.add_filtering:
         boxes, scores, labels, inds = post_process(boxes, classification)
     else:
-        boxes, scores, labels, inds = post_process_nms_applied(boxes, classification, labels, no_seq_nms=args.no_seq_nms)
+        boxes, scores, labels, inds = post_process_nms_applied(boxes, classification, labels, no_seq_nms=args.no_seq_nms, score_metric=args.score_metric)
     #print(boxes.shape, scores.shape, labels.shape)
-
+    print("post-processing time: ", time.time() - start)
     # visualize detections
     visualize_video(boxes, scores, labels, inds, scale, pause_rate=args.pause_length)
 
