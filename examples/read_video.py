@@ -11,7 +11,7 @@ from keras_retinanet.utils.image import read_image_bgr, preprocess_image, resize
 from keras_retinanet.utils.visualization import draw_box, draw_caption
 from keras_retinanet.utils.colors import label_color
 from keras_retinanet.utils.gpu import setup_gpu
-from keras_retinanet.utils.seq_nms import seq_nms
+from keras_retinanet.utils.seq_nms import seq_nms, BoxGraph
 from keras_retinanet.utils.nms import non_max_suppression_fast
 import keras_retinanet.backend as backend
 import keras_retinanet.layers as layers
@@ -108,7 +108,11 @@ def post_process(boxes, classifications, max_detections=300):
 
     # concatenate indices to single tensor
     indices = keras.backend.concatenate(all_indices, axis=0)
-    seq_nms(boxes, scores)
+    bg = BoxGraph()
+    for f in range(boxes.shape[0]):
+        bg.add_layer(np.expand_dims(boxes[f,:,:], axis=0), np.expand_dims(scores[f,:,:]))
+    
+    bg.seq_nms()
             
     
     # select top k
@@ -288,6 +292,7 @@ if __name__ == '__main__':
 
     # Post-processing
     start = time.time()
+
     if not args.add_filtering:
         boxes, scores, labels, inds = post_process(boxes, classification)
     else:
