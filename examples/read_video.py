@@ -25,6 +25,8 @@ import time
 import pickle 
 from argparse import ArgumentParser
 
+import multiprocessing
+
 # set tf backend to allow memory to grow, instead of claiming everything
 import tensorflow as tf
 
@@ -33,19 +35,13 @@ from tensorflow.python.util import deprecation
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
 num_classes = 80
-def post_process_nms_applied(boxes, classifications, labels, max_detections=300, no_seq_nms=False, score_metric='avg'):
-    if not no_seq_nms:
-        #seq_nms(boxes, classifications, labels, score_metric=score_metric)
-        bg = BoxGraph()
-        for f in range(boxes.shape[0]):
-            print("class shape:", classifications.shape)
-            bg.add_layer(np.expand_dims(boxes[f,:,:], axis=0), np.expand_dims(classifications[f,:], axis=0))
+def post_process_nms_applied(bg, labels, max_detections=300, no_seq_nms=False, score_metric='avg'):
     print("boxes", bg.boxes.shape)
     print("scores", bg.scores.shape)
     bg.seq_nms()
     #print(classifications[0][0])
     indices = []
-    for i in range(boxes.shape[0]):
+    for i in range(bg.boxes.shape[0]):
         frame_indices = non_max_suppression_fast(bg.boxes[i,:,:], bg.scores[i,:], overlapThresh=0.5)
         frame_indices = [[i, idx] for idx in frame_indices]
         indices.append(frame_indices)
@@ -58,11 +54,11 @@ def post_process_nms_applied(boxes, classifications, labels, max_detections=300,
     boxes               = backend.gather_nd(bg.boxes, indices)
     labels              = backend.gather_nd(labels, indices)
 
-    indices=indices.eval(session=tf.compat.v1.Session())  
-    boxes=boxes.eval(session=tf.compat.v1.Session())
-    scores=scores.eval(session=tf.compat.v1.Session())
-    labels=labels.eval(session=tf.compat.v1.Session())
-    print("boxes", bg.boxes.shape)
+
+    indices=indices.numpy()  
+    boxes=boxes.numpy()
+    scores=scores.numpy()
+    labels=labels.numpy()
     return boxes, scores, labels, indices
 
 def post_process(boxes, classifications, max_detections=300):
@@ -119,13 +115,13 @@ def capture_video_frames(video_file, num_frames_to_capture=3, start_fpos=0):
     draw_frames = []
     while(cap.isOpened()):
         ret, frame = cap.read()
-        
+        frame = cv2.rotate(frame, cv2.ROTATE_180) 
         #cv2.imshow('frame',gray)
         #if cv2.waitKey(1) & 0xFF == ord('q'):
         #    break
 
         # collect drawing frames 
-        draw = cv2.cvtColor(frame.copy(), cv2.COLOR_BGR2RGB)
+        draw = frame.copy()
         draw_frames.append(draw)
 
         # preprocess frames 
@@ -145,7 +141,7 @@ def capture_video_frames(video_file, num_frames_to_capture=3, start_fpos=0):
     print("Image batch:", all_frames.shape)
     return all_frames, draw_frames, scale
 
-def build_model(model_file, add_filtering=True, max_detections=2000, nms_threshold=0.6, score_threshold=0.05, training_model=False, filtering_layer_included=False):
+def build_model(model_file, add_filtering=True, max_detections=100, nms_threshold=0.6, score_threshold=0.05, training_model=False, filtering_layer_included=False):
     model_path = os.path.join('..', 'snapshots', model_file)
     # load retinanet model
     model = models.load_model(model_path, backbone_name='resnet50')
@@ -215,7 +211,7 @@ def parse_args():
     parser.add_argument('--score_threshold', help='Threshold to use as minimum confidence for score confidences', default=0.05, type=float)
     parser.add_argument('--nms_threshold', help='Threshold to use as for nms algorithm', default=0.6, type=float)
     parser.add_argument('--seq_nms_threshold', help='Threshold to use for suppression of boxes with regards to best sequences in seq-nms algorithm', default=0.4, type=float)
-    parser.add_argument('--max_detections', help='Maximum number of detections to return from post-processing', default=2000, type=int)
+    parser.add_argument('--max_detections', help='Maximum number of detections to return from post-processing', default=500, type=int)
     parser.add_argument('--training_model', help='Flag indicating whether model is training model or not', action='store_true')
     parser.add_argument('--filter_layer_included', help='Flag indicating whether loaded model already contains a filtering level', action='store_true')
     parser.add_argument('--general_detection', help='Flag indicating whether loaded model is general fine-tuned for ball dectection', action='store_true')
@@ -223,6 +219,42 @@ def parse_args():
     parser.add_argument('--score_metric', help='Scoring metric to use for rescoring best sequence in seq-nms algorithm', default='avg', type=str)
     args = parser.parse_args()
     return args 
+
+class Consumer(multiprocessing.Process):
+    
+    def __init__(self, task_queue, result_queue):
+        multiprocessing.Process.__init__(self)
+        self.task_queue = task_queue
+        self.result_queue = result_queue
+        self.box_graph = BoxGraph()
+
+    def run(self):
+        proc_name = self.name
+        while True:
+            next_task = self.task_queue.get()
+            if next_task is None:
+                # Poison pill means shutdown
+                print('%s: Exiting' % proc_name)
+                self.task_queue.task_done()
+                break
+            print('%s: %s' % (proc_name, next_task))
+            boxes, scores = next_task()
+            start = time.time()
+            self.box_graph.add_layer(boxes, scores)
+            print("add layer", time.time() - start)
+            self.task_queue.task_done()
+            #self.result_queue.put(answer)
+        self.result_queue.put(self.box_graph)
+
+class Task(object):
+    def __init__(self, boxes, scores):
+        self.boxes = boxes
+        self.scores = scores
+    def __call__(self):
+        return self.boxes, self.scores
+    def __str__(self):
+        return 'Task'
+
 
 if __name__ == '__main__':
     # use this to change which GPU to use
@@ -237,6 +269,12 @@ if __name__ == '__main__':
     else:
         labels_to_names = {0:'ball'}
 
+
+    task_queue, result_queue = multiprocessing.JoinableQueue(), multiprocessing.Queue()
+
+    consumer = Consumer(task_queue, result_queue)
+    consumer.start()
+
     # get video frames, draw frames and scale
 
     image_batch, draw_frames, scale = capture_video_frames(args.video_file, num_frames_to_capture=args.frames_to_capture, start_fpos=args.start_fpos)
@@ -246,21 +284,41 @@ if __name__ == '__main__':
                 score_threshold=args.score_threshold, training_model=args.training_model, filtering_layer_included=args.filter_layer_included)
 
     # process frames 
+    model.predict_on_batch(np.expand_dims(image_batch[0], axis=0))
     start = time.time()
+    labels = np.array([])
+    for x in range(0, image_batch.shape[0]-1, 2):
+        print("step", x)
+        start1 = time.time()
+        b, c, l = model.predict_on_batch(image_batch[x:x+2])
+        print("inf time:", time.time() - start1)
+        for i in range(2):
+            task_queue.put(Task(np.expand_dims(b[i], axis=0), np.expand_dims(c[i], axis=0)))
+        if labels.size == 0:
+            labels = l
+        else:
+            labels = np.concatenate((labels, l))
+    task_queue.put(None)
+    task_queue.join()
+    print("processing time1: ", time.time() - start)
+    start = time.time()
+  
+    #boxes, classifications, labels = model.predict_on_batch(image_batch)
 
-    boxes, classification, labels = model.predict_on_batch(image_batch)
-    print(boxes.shape, classification.shape, labels.shape)
-    print("processing time: ", time.time() - start)
+    graph = result_queue.get()
+
+
     #np.save("boxes15.npy", boxes)
     #np.save("classifcations15.npy", classification)
 
     # Post-processing
+    print(graph.boxes)
     start = time.time()
 
     if not args.add_filtering:
         boxes, scores, labels, inds = post_process(boxes, classification)
     else:
-        boxes, scores, labels, inds = post_process_nms_applied(boxes, classification, labels, no_seq_nms=args.no_seq_nms, score_metric=args.score_metric)
+        boxes, scores, labels, inds = post_process_nms_applied(graph, labels, no_seq_nms=args.no_seq_nms, score_metric=args.score_metric)
     #print(boxes.shape, scores.shape, labels.shape)
     print("post-processing time: ", time.time() - start)
     # visualize detections
@@ -268,7 +326,6 @@ if __name__ == '__main__':
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     video = cv2.VideoWriter("out.mp4", fourcc,30, (1920, 1080));
     for idx in range(boxes.shape[0]):
-        print(boxes.shape, scores.shape, inds.shape)
         visualize_video(boxes[idx,:], scores[idx],
                 labels[idx], inds[idx], scale, pause_rate=args.pause_length)
 
@@ -298,3 +355,4 @@ if __name__ == '__main__':
         plt.pause(3)
         plt.close()
     '''
+
