@@ -28,7 +28,7 @@ class BoxGraph:
     def __init__(self):
         self.box_graph = []
         self.prev_boxes = None
-        self.prev_areas = None
+        self.prev_area = np.array([])
         self.prev_scores = None
         self.boxes = np.array([])
         self.scores = np.array([])
@@ -44,19 +44,18 @@ class BoxGraph:
             A list of shape (num_frames - 1, num_boxes, k, 1) where k is the number of edges to boxes in neighboring frame (s.t. 0 <= k <= num_boxes at f+1)
             and last dimension gives the index of that neighboring box. 
         '''
-        box_graph = []
         # iterate over neighboring frames 
-        boxes_f1, scores_f1 = boxes[0,:,:], scores[0,:]
+        boxes_f1, scores_f1 = box_layer[0,:,:], scores[0,:]
         if self.boxes.size == 0:
             self.boxes = box_layer
             self.scores = scores
         else:
             self.boxes = np.concatenate((self.boxes, box_layer))
-            self.scores = np.concatenate(self.scores, scores)
+            self.scores = np.concatenate((self.scores, scores))
 
-        if not self.prev_area:
-            self.prev_area = compute_area(boxes_f.astype(np.double)) #(boxes_f[:,2] - boxes_f[:,0] + 1) * (boxes_f[:,3] - boxes_f[:,1] + 1)
-            self.prev_boxes, self.prev_scores = boxes[0,:,:], scores[0,:]
+        if self.prev_area.size == 0:
+            self.prev_area = compute_area(boxes_f1.astype(np.double)) #(boxes_f[:,2] - boxes_f[:,0] + 1) * (boxes_f[:,3] - boxes_f[:,1] + 1)
+            self.prev_boxes, self.prev_scores = boxes_f1, scores_f1
             return
         else: 
             areas_f = self.prev_area
@@ -75,10 +74,10 @@ class BoxGraph:
             else:
                 edges = [ovr_idx for ovr_idx, IoU in enumerate(overlaps) if IoU >= linkage_threshold and labels[f,i] == labels[f+1,ovr_idx]]
             adjacency_matrix.append(edges)
-        box_graph.append(adjacency_matrix)
+        self.box_graph.append(adjacency_matrix)
         self.prev_area, self.prev_boxes, self.prev_scores = areas_f1, boxes_f1, scores_f1
 
-    def seq_nms(labels=None, linkage_threshold=0.5, nms_threshold=0.3, score_metric='avg'):
+    def seq_nms(self, labels=None, linkage_threshold=0.5, nms_threshold=0.3, score_metric='avg'):
         ''' Filter detections using the seq-nms algorithm. Boxes and classifications should be organized sequentially along the first dimension 
         corresponding to the input frame.  
         Args 
@@ -87,7 +86,8 @@ class BoxGraph:
             linkage_threshold     : Threshold used to link two boxes in adjacent frames 
             nms_threshold         : Threshold for the IoU value to determine when a box should be suppressed with regards to a best sequence.
         '''
-        # use filtered boxes and scores to create nms graph across frames 
+        # use filtered boxes and scores to create nms graph across frames
+        self.box_graph = np.array(self.box_graph)
         print("BOX GRAPH SHAPE", self.box_graph.shape)
         _seq_nms(self.box_graph, self.boxes, self.scores, nms_threshold, score_metric=score_metric)
 
@@ -103,7 +103,6 @@ def build_box_sequences(boxes, scores, labels=[], linkage_threshold=0.5):
         A list of shape (num_frames - 1, num_boxes, k, 1) where k is the number of edges to boxes in neighboring frame (s.t. 0 <= k <= num_boxes at f+1)
         and last dimension gives the index of that neighboring box. 
     '''
-    box_graph = []
     # iterate over neighboring frames 
     for f in range(boxes.shape[0] - 1):
         boxes_f, scores_f = boxes[f,:,:], scores[f,:]
@@ -126,7 +125,7 @@ def build_box_sequences(boxes, scores, labels=[], linkage_threshold=0.5):
             else:
                 edges = [ovr_idx for ovr_idx, IoU in enumerate(overlaps) if IoU >= linkage_threshold and labels[f,i] == labels[f+1,ovr_idx]]
             adjacency_matrix.append(edges)
-        box_graph.append(adjacency_matrix)
+        self.box_graph.append(adjacency_matrix)
     return np.array(box_graph)
 
 def find_best_sequence(box_graph, scores):

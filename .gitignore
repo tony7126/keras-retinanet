@@ -15,9 +15,19 @@ __pycache__/
 /*.egg-info/
 .installed.cfg
 *.egg
-
+*mp4
 # Unit test / coverage reports
 .coverage
 .coverage.*
 coverage.xml
 *.cover
+
+keras_retinanet/utils/*so
+keras_retinanet/utils/*c
+examples/csvfile*
+*h5
+*MOV
+csv_data
+classes
+custom_anchors.ini
+ca_strides.ini

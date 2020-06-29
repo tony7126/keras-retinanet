@@ -29,69 +29,40 @@ from argparse import ArgumentParser
 import tensorflow as tf
 
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-import tensorflow.python.util.deprecation as deprecation
+from tensorflow.python.util import deprecation
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
 num_classes = 80
 def post_process_nms_applied(boxes, classifications, labels, max_detections=300, no_seq_nms=False, score_metric='avg'):
-    '''
-    all_inds = []
-    for i in range(num_classes):
-        class_ind = np.where(labels==i)
-        all_inds.append(class_ind)
-    scores_by_class = []
-    boxes_by_class = []
-    for class_idx, class_ind in enumerate(all_inds):
-        class_scores = [[] for i in range(boxes.shape[0])]
-        class_boxes = [[] for i in range(boxes.shape[0])]
-        for row in class_ind:
-            print(row)
-            frame_inds, box_inds = row 
-            for i in range(frame_inds):
-                f_idx, b_idx = frame_inds[i], box_inds[i]
-                class_scores[f_idx].append(classifications[f_idx][b_idx])
-                class_boxes[f_idx].append(boxes[f_idx,][b_idx])
-        scores_by_class.append(class_scores)
-        boxes_by_class.append(class_boxes)   
-    scores_by_class = np.array(scores_by_class)
-    boxes_by_class = np.array(boxes_by_class)
-    all_indices = []
-    for class_idx in range(scores_by_class.shape[0]):
-        class_scores = scores_by_class[class_idx]
-        class_boxes = boxes_by_class[class_idx]
-        seq_nms(class_boxes, class_scores)
-        class_indices = non_max_suppresion_fasts(class_boxes, class_scores)
-        all_indices.append(class_indices)
-    
-    indices = keras.backend.concatenate(all_indices, axis=0)
-
-    #scores = backend.gather_nd(scores_by_class, indices)
-    '''
-    #print(classifications[0][0])
-    #print(classifications[0][0],classifications[1][0],classifications[2][2],classifications[3][0],classifications[4][2])
-    #print(labels[0][0],labels[1][0],labels[2][2],labels[3][0],labels[4][2])
     if not no_seq_nms:
-        seq_nms(boxes, classifications, labels, score_metric=score_metric)
+        #seq_nms(boxes, classifications, labels, score_metric=score_metric)
+        bg = BoxGraph()
+        for f in range(boxes.shape[0]):
+            print("class shape:", classifications.shape)
+            bg.add_layer(np.expand_dims(boxes[f,:,:], axis=0), np.expand_dims(classifications[f,:], axis=0))
+    print("boxes", bg.boxes.shape)
+    print("scores", bg.scores.shape)
+    bg.seq_nms()
     #print(classifications[0][0])
     indices = []
     for i in range(boxes.shape[0]):
-        frame_indices = non_max_suppression_fast(boxes[i,:,:], classifications[i,:], overlapThresh=0.5)
+        frame_indices = non_max_suppression_fast(bg.boxes[i,:,:], bg.scores[i,:], overlapThresh=0.5)
         frame_indices = [[i, idx] for idx in frame_indices]
         indices.append(frame_indices)
     indices = keras.backend.concatenate(indices, axis=0)
 
-    scores              = backend.gather_nd(classification, indices)
+    scores              = backend.gather_nd(bg.scores, indices)
     scores, top_indices = backend.top_k(scores, k=keras.backend.minimum(max_detections, keras.backend.shape(scores)[0]))
     
     indices             = keras.backend.gather(indices, top_indices)
-    boxes               = backend.gather_nd(boxes, indices)
+    boxes               = backend.gather_nd(bg.boxes, indices)
     labels              = backend.gather_nd(labels, indices)
 
     indices=indices.eval(session=tf.compat.v1.Session())  
     boxes=boxes.eval(session=tf.compat.v1.Session())
     scores=scores.eval(session=tf.compat.v1.Session())
     labels=labels.eval(session=tf.compat.v1.Session())
-
+    print("boxes", bg.boxes.shape)
     return boxes, scores, labels, indices
 
 def post_process(boxes, classifications, max_detections=300):
@@ -214,29 +185,21 @@ def build_model(model_file, add_filtering=True, max_detections=2000, nms_thresho
 
     return model1
 
-def visualize_video(boxes, scores, labels, indices, scale, pause_rate=3):
-    boxes /= scale
-    for i, frame_idx in enumerate(inds[:,0]):
-        box, score, label = boxes[i], scores[i], labels[i]
-        #print(box, score, label)
-        draw = draw_frames[frame_idx]
-        if score < 0.5: continue
+def visualize_video(box, score, label, index, scale, pause_rate=3):
+    box /= scale
+    frame_idx = index[0]
+    #print(box, score, label)
+    draw = draw_frames[frame_idx]
+    if score < 0.5: return
 
-        color = label_color(label)
+    color = label_color(label)
 
-        b = box.astype(int)
-        draw_box(draw, b, color=color)
+    b = box.astype(int)
+    draw_box(draw, b, color=color)
             
-        caption = "{} {:.3f}".format(labels_to_names[label], score)
-        draw_caption(draw, b, caption)
-
-    for draw in draw_frames:
-        plt.figure(figsize=(15, 15))
-        plt.axis('off')
-        plt.imshow(draw)
-        plt.show(block=False)
-        plt.pause(pause_rate)
-        plt.close()
+    caption = "{} {:.3f}".format(labels_to_names.get(label, "misc"), score)
+    draw_caption(draw, b, caption)
+    #video.write(draw)
 
 def parse_args():
     """ Parse the arguments.
@@ -274,7 +237,8 @@ if __name__ == '__main__':
     else:
         labels_to_names = {0:'ball'}
 
-    # get video frames, draw frames and scale 
+    # get video frames, draw frames and scale
+
     image_batch, draw_frames, scale = capture_video_frames(args.video_file, num_frames_to_capture=args.frames_to_capture, start_fpos=args.start_fpos)
 
     #build model 
@@ -300,8 +264,17 @@ if __name__ == '__main__':
     #print(boxes.shape, scores.shape, labels.shape)
     print("post-processing time: ", time.time() - start)
     # visualize detections
-    visualize_video(boxes, scores, labels, inds, scale, pause_rate=args.pause_length)
+    #print("inds", inds)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    video = cv2.VideoWriter("out.mp4", fourcc,30, (1920, 1080));
+    for idx in range(boxes.shape[0]):
+        print(boxes.shape, scores.shape, inds.shape)
+        visualize_video(boxes[idx,:], scores[idx],
+                labels[idx], inds[idx], scale, pause_rate=args.pause_length)
 
+    for frame in draw_frames:
+        video.write(frame)
+    video.release()
     '''
     for frame_idx, draw in enumerate(draw_frames):
         boxes_f, scores_f, labels_f = boxes[frame_idx], scores[frame_idx], labels[frame_idx]
