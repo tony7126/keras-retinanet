@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 import numpy as np
 import copy 
 from ..utils.compute_overlap import compute_overlap_areas_given, compute_area
@@ -67,7 +66,6 @@ class BoxGraph:
         adjacency_matrix = []
         for i, box in enumerate(boxes_f):
             overlaps = compute_overlap_areas_given(np.expand_dims(box,axis=0).astype(np.double), boxes_f1.astype(np.double), areas_f1.astype(np.double) )[0]
-
             # add linkage if IoU greater than threshold and boxes have same labels i.e class  
             if len(labels) == 0 :
                 edges = [ovr_idx for ovr_idx, IoU in enumerate(overlaps) if IoU >= linkage_threshold]

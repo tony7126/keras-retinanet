@@ -284,15 +284,16 @@ if __name__ == '__main__':
                 score_threshold=args.score_threshold, training_model=args.training_model, filtering_layer_included=args.filter_layer_included)
 
     # process frames 
-    model.predict_on_batch(np.expand_dims(image_batch[0], axis=0))
+    stepsize=2
+    model.predict_on_batch(image_batch[0:stepsize])
     start = time.time()
     labels = np.array([])
-    for x in range(0, image_batch.shape[0]-1, 2):
+    for x in range(0, image_batch.shape[0]-(stepsize - 1), stepsize):
         print("step", x)
         start1 = time.time()
-        b, c, l = model.predict_on_batch(image_batch[x:x+2])
+        b, c, l = model.predict_on_batch(image_batch[x:x+stepsize])
         print("inf time:", time.time() - start1)
-        for i in range(2):
+        for i in range(stepsize):
             task_queue.put(Task(np.expand_dims(b[i], axis=0), np.expand_dims(c[i], axis=0)))
         if labels.size == 0:
             labels = l
@@ -312,7 +313,6 @@ if __name__ == '__main__':
     #np.save("classifcations15.npy", classification)
 
     # Post-processing
-    print(graph.boxes)
     start = time.time()
 
     if not args.add_filtering:
